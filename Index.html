@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>任務查核回報系統</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-800 antialiased font-sans">
+  <div id="app" class="max-w-md mx-auto min-h-screen pb-16 px-4 pt-6">
+
+    <!-- ================= 第一道防線：入場門禁畫面 ================= -->
+    <div v-if="!isAuthenticated" class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 mt-12 text-center">
+      <div class="w-16 h-16 bg-emerald-100 text-emerald-700 rounded-2xl flex items-center justify-center text-3xl mx-auto mb-4">
+        🔐
+      </div>
+      <h1 class="text-xl font-bold text-slate-800">講師身份驗證</h1>
+      <p class="text-xs text-slate-500 mt-1 mb-6">本系統為講師專用，需輸入正確通行碼以讀取資料</p>
+
+      <div class="space-y-4 text-left">
+        <div>
+          <label class="text-xs font-semibold text-slate-600 block mb-1">查核講師姓名</label>
+          <input v-model="loginInstructor" type="text" placeholder="請輸入姓名" 
+                 class="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none">
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-slate-600 block mb-1">入場通行密碼</label>
+          <input v-model="loginPasscode" type="password" placeholder="請輸入4位密碼 (例如 8888)" 
+                 @keyup.enter="handleLogin"
+                 class="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none">
+        </div>
+        
+        <p v-if="loginError" class="text-xs text-rose-500 font-medium bg-rose-50 p-2.5 rounded-lg border border-rose-100">
+          ❌ {{ loginError }}
+        </p>
+
+        <button @click="handleLogin" 
+                :disabled="verifyingLogin"
+                class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-400 text-white font-medium text-sm rounded-xl shadow-sm transition active:scale-95 flex items-center justify-center gap-1.5">
+          <span v-if="verifyingLogin">驗證通行碼中...</span>
+          <span v-else>驗證並進入系統</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ================= 內部主畫面（驗證通過才顯示） ================= -->
+    <div v-else>
+      <!-- Header -->
+      <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 mb-4">
+        <div class="flex items-center justify-between">
+          <h1 class="text-xl font-bold text-emerald-800 flex items-center gap-2">
+            <span>✨</span> 任務查核回報系統
+          </h1>
+          <button @click="handleLogout" class="text-xs text-slate-400 hover:text-rose-500 transition">
+            登出
+          </button>
+        </div>
+        <p class="text-xs text-slate-500 mt-1">查核講師：<b class="text-slate-700">{{ instructor }}</b></p>
+        
+        <!-- 當前查核學員選單 -->
+        <div class="mt-4">
+          <label class="text-xs font-medium text-slate-600">當前查核學員</label>
+          <select v-model="currentStudentId" class="w-full mt-1 px-3 py-2 text-sm bg-slate-50 border rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none">
+            <option v-if="loading" value="">讀取學員名單中...</option>
+            <option v-else-if="students.length === 0" value="">(無學員資料)</option>
+            <option v-for="s in students" :key="s.id" :value="String(s.id)">
+              {{ s.group ? s.group + ' - ' : '' }}{{ s.name }}
+            </option>
+          </select>
+        </div>
+
+        <!-- 當前學員小提示 -->
+        <div v-if="currentStudent" class="mt-3 p-2.5 bg-emerald-50 rounded-xl text-xs text-emerald-800 flex justify-between items-center">
+          <span>目前對象：<b>{{ currentStudent.name }}</b> <span v-if="currentStudent.group">({{ currentStudent.group }})</span></span>
+          <span class="text-[11px] bg-white px-2 py-0.5 rounded border border-emerald-200">編號: {{ currentStudent.id }}</span>
+        </div>
+        <div v-else-if="!loading && students.length === 0" class="mt-3 p-2.5 bg-amber-50 rounded-xl text-xs text-amber-800">
+          ⚠️ 尚未讀取到學員，請確認試算表有建立「學員名單」分頁！
+        </div>
+      </div>
+
+      <!-- 任務分類切換 -->
+      <div class="flex gap-2 mb-4 overflow-x-auto pb-1">
+        <button v-for="cat in categories" :key="cat" @click="activeCat = cat"
+                :class="activeCat === cat ? 'bg-emerald-600 text-white font-medium shadow-sm' : 'bg-white text-slate-600 border'"
+                class="px-4 py-1.5 rounded-full text-xs transition whitespace-nowrap">
+          {{ cat }}
+        </button>
+      </div>
+
+      <!-- 任務清單卡片 -->
+      <div class="space-y-2.5">
+        <div v-for="t in filteredTasks" :key="t.id" 
+             class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm transition">
+          
+          <!-- 上半部：任務標題與按鈕 -->
+          <div class="flex items-start justify-between gap-3">
+            <div class="flex-1">
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="text-xs font-semibold px-2 py-0.5 rounded-md" 
+                      :class="t.category === '生活' ? 'bg-amber-100 text-amber-800' : (t.category === '道務' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800')">
+                  {{ t.category }}
+                </span>
+                <span v-if="t.needProof" class="text-[10px] bg-rose-50 text-rose-600 border border-rose-200 px-1.5 py-0.5 rounded font-medium">
+                  📷 需照片或親眼見證
+                </span>
+                <span v-if="t.hasNotePrompt" class="text-[10px] bg-indigo-50 text-indigo-600 border border-indigo-200 px-1.5 py-0.5 rounded">
+                  📝 可填備註
+                </span>
+              </div>
+              <p class="text-sm font-medium mt-1.5 text-slate-800">{{ t.name }}</p>
+            </div>
+
+            <div class="flex items-center gap-1.5 shrink-0">
+              <!-- 展開備註按鈕 -->
+              <button v-if="!isCompleted(t.name)" 
+                      @click="toggleNote(t.id)" 
+                      type="button"
+                      class="p-1.5 rounded-lg border border-slate-200 text-xs text-slate-500 hover:bg-slate-50 active:scale-95"
+                      :class="{'bg-emerald-50 text-emerald-700 border-emerald-300': showNoteInput[t.id] || (taskNotes[t.id] && taskNotes[t.id].length > 0)}"
+                      title="填寫備註">
+                ✏️
+              </button>
+
+              <!-- 觸發簽核彈窗確認 -->
+              <button @click="openConfirmModal(t)" 
+                      :disabled="isCompleted(t.name)"
+                      :class="isCompleted(t.name) ? 'bg-emerald-100 text-emerald-700 cursor-not-allowed' : 'bg-slate-900 text-white active:scale-95'"
+                      class="px-3.5 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1">
+                <span v-if="isCompleted(t.name)">✓ 已核可</span>
+                <span v-else>核可完成</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 下半部 1：填寫備註框（未完成時展開） -->
+          <div v-if="!isCompleted(t.name) && (showNoteInput[t.id] || t.hasNotePrompt || t.needProof)" class="mt-3 pt-2.5 border-t border-slate-100">
+            <label class="text-[11px] font-medium text-slate-500 block mb-1">
+              ✍️ 查核備註 / 學習內容簽註：
+            </label>
+            <input v-model="taskNotes[t.id]" 
+                   type="text" 
+                   :placeholder="t.placeholder || '輸入備註（如背誦內容、心得亮點...）'"
+                   class="w-full px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:ring-1 focus:ring-emerald-500 outline-none">
+          </div>
+
+          <!-- 下半部 2：若已完成且有備註，直接顯示給講師看 -->
+          <div v-if="isCompleted(t.name) && getCompletedNote(t.name)" class="mt-2.5 pt-2 border-t border-slate-100 text-xs text-slate-500 flex items-center gap-1">
+            <span class="text-slate-400">備註：</span>
+            <span class="text-slate-700 font-medium">{{ getCompletedNote(t.name) }}</span>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 第二道防線：完成簽核彈窗（二次確認密碼） ================= -->
+    <div v-if="modalTask" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div class="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl">
+        <div class="text-center mb-4">
+          <div class="w-12 h-12 bg-amber-100 text-amber-700 rounded-full flex items-center justify-center text-xl mx-auto mb-2">
+            ✍️
+          </div>
+          <h3 class="text-base font-bold text-slate-800">完成簽核確認</h3>
+          <p class="text-xs text-slate-500 mt-0.5">請確認查核資訊並再次輸入通行碼</p>
+        </div>
+
+        <div class="bg-slate-50 rounded-xl p-3 text-xs space-y-1.5 mb-4 text-slate-600 border border-slate-100">
+          <div>對象學員：<b class="text-slate-800">{{ currentStudent ? currentStudent.name : '' }}</b> ({{ currentStudent ? currentStudent.group : '' }})</div>
+          <div>任務項目：<span class="text-emerald-700 font-medium">{{ modalTask.name }}</span></div>
+          <div v-if="taskNotes[modalTask.id]">備註內容：<span class="text-slate-800 font-medium">{{ taskNotes[modalTask.id] }}</span></div>
+        </div>
+
+        <div class="mb-4">
+          <label class="text-xs font-semibold text-slate-600 block mb-1">講師簽核密碼</label>
+          <input v-model="confirmPasscode" type="password" placeholder="請再次輸入4位通行碼" 
+                 @keyup.enter="submitConfirmedTask"
+                 class="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none">
+          <p v-if="confirmError" class="text-xs text-rose-500 mt-1 font-medium">{{ confirmError }}</p>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <button @click="closeModal" 
+                  :disabled="submitting"
+                  class="py-2 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition">
+            取消
+          </button>
+          <button @click="submitConfirmedTask" 
+                  :disabled="submitting"
+                  class="py-2 text-xs font-medium text-white bg-slate-900 hover:bg-black rounded-xl transition flex items-center justify-center gap-1">
+            <span v-if="submitting">記錄中...</span>
+            <span v-else>確認簽核送出</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // ⚠️ 務必填入你在 Apps Script 發布的 Web App 網址（結尾是 /exec）
+    const API_URL = 'https://script.google.com/macros/s/AKfycbw0qOl4o0KU_ZhZfTlI1IyuwV6s1IAtWrJN6TJpQzN-kkEyeHyz7s2lhSUdfAJ4Ls94Jw/exec';
+
+    const { createApp, ref, computed } = Vue;
+    createApp({
+      setup() {
+        const loading = ref(false);
+        const isAuthenticated = ref(false);
+        const verifyingLogin = ref(false);
+        const loginInstructor = ref(localStorage.getItem('saved_instructor') || '');
+        const loginPasscode = ref('');
+        const loginError = ref('');
+
+        const instructor = ref(localStorage.getItem('saved_instructor') || '');
+        const currentStudentId = ref('');
+        const activeCat = ref('全部');
+        const students = ref([]);
+        const completedTasks = ref([]);
+
+        const modalTask = ref(null);
+        const confirmPasscode = ref('');
+        const confirmError = ref('');
+        const submitting = ref(false);
+
+        const taskNotes = ref({});
+        const showNoteInput = ref({});
+
+        const toggleNote = (id) => {
+          showNoteInput.value[id] = !showNoteInput.value[id];
+        };
+
+        const tasks = ref([
+          { id: 1, category: '生活', name: '1. 分享感恩的三件事或小確幸' },
+          { id: 2, category: '生活', name: '2. 主動學習場復、佛堂、茶水毛巾', needProof: true, placeholder: '請填寫簽註學習項目' },
+          { id: 3, category: '生活', name: '3. 學習機動或是服務員超人', needProof: true, placeholder: '請講師填寫班員任務內容' },
+          { id: 4, category: '生活', name: '4. 分享自己對於經典閱讀心得' },
+          { id: 5, category: '生活', name: '5. 參辭駕禮節', needProof: true, placeholder: '請填寫簽註學習內容' },
+          { id: 6, category: '生活', name: '6. 跟同車夥伴分享課堂故事或印象深刻句子' },
+          { id: 7, category: '生活', name: '7. 關心二位風向星座夥伴', placeholder: '關心的夥伴姓名' },
+          { id: 8, category: '生活', name: '8. 幫同修洗碗', placeholder: '幫忙夥伴的姓名' },
+          { id: 9, category: '生活', name: '9. 與同修分享週末收穫', placeholder: '分享夥伴的姓名' },
+          { id: 10, category: '生活', name: '10. 與同修打招呼，並噓寒問暖', placeholder: '打招呼之夥伴姓名' },
+          { id: 11, category: '道務', name: '1. 學習初一十五或辦道工作', placeholder: '學習執事項目' },
+          { id: 12, category: '道務', name: '2. 帶新人參加活動或用餐', placeholder: '帶領的新人姓名' },
+          { id: 13, category: '道務', name: '3. 帶人開法會', placeholder: '班員姓名' },
+          { id: 14, category: '道務', name: '4. 帶人求道', placeholder: '新求道人/班員姓名' },
+          { id: 15, category: '道務', name: '5. 開口渡人，關心人', placeholder: '講師見證&簽註受關心者姓名' },
+          { id: 16, category: '班務', name: '1. 經典會考 (找班務講師背誦)', hasNotePrompt: true, placeholder: '填寫背誦經典名稱、完成時間' },
+          { id: 17, category: '班務', name: '2. 研究班時發問或筆記', placeholder: '提問內容簡述' },
+          { id: 18, category: '班務', name: '3. 分享研究班內容或實踐心得' },
+          { id: 19, category: '班務', name: '4. 關心研究班夥伴', placeholder: '關心的夥伴姓名' },
+          { id: 20, category: '班務', name: '5. 主動學習研究班場復或茶水毛巾', needProof: true, placeholder: '請講師填寫班員任務內容' },
+          { id: 21, category: '班務', name: '6. 分享經典收穫' },
+          { id: 22, category: '生活', name: '7. 勤作筆記150字 (手札講師確認)', hasNotePrompt: true, placeholder: '手札重點簡述或確認字數' }
+        ]);
+
+        const categories = ['全部', '生活', '道務', '班務'];
+
+        const currentStudent = computed(() => {
+          return students.value.find(s => String(s.id).trim() === String(currentStudentId.value).trim());
+        });
+
+        const filteredTasks = computed(() => {
+          if (activeCat.value === '全部') return tasks.value;
+          return tasks.value.filter(t => t.category === activeCat.value);
+        });
+
+        const isCompleted = (taskName) => {
+          return completedTasks.value.some(r => 
+            String(r.studentId).trim() === String(currentStudentId.value).trim() && 
+            String(r.task).trim() === String(taskName).trim()
+          );
+        };
+
+        const getCompletedNote = (taskName) => {
+          const record = completedTasks.value.find(r => 
+            String(r.studentId).trim() === String(currentStudentId.value).trim() && 
+            String(r.task).trim() === String(taskName).trim()
+          );
+          return record ? (record.note || '') : '';
+        };
+
+        // 第一關：發送 POST 請求給 Apps Script
+        const handleLogin = async () => {
+          if (!loginInstructor.value.trim()) {
+            loginError.value = '請填寫查核講師姓名！';
+            return;
+          }
+          if (!loginPasscode.value.trim()) {
+            loginError.value = '請輸入通行密碼！';
+            return;
+          }
+
+          loginError.value = '';
+          verifyingLogin.value = true;
+
+          try {
+            const res = await fetch(API_URL, {
+              method: 'POST',
+              body: JSON.stringify({
+                action: 'login',
+                passcode: loginPasscode.value.trim()
+              })
+            });
+            const data = await res.json();
+
+            verifyingLogin.value = false;
+            if (!data.success) {
+              loginError.value = data.message || '通行碼錯誤！';
+              return;
+            }
+
+            instructor.value = loginInstructor.value.trim();
+            localStorage.setItem('saved_instructor', instructor.value);
+            isAuthenticated.value = true;
+
+            if (data.data && data.data.students) {
+              students.value = data.data.students;
+              if (students.value.length > 0 && !currentStudentId.value) {
+                currentStudentId.value = String(students.value[0].id);
+              }
+            }
+            if (data.data && data.data.records) {
+              completedTasks.value = data.data.records;
+            }
+          } catch (err) {
+            verifyingLogin.value = false;
+            loginError.value = '連線伺服器失敗，請確認 API 網址！';
+          }
+        };
+
+        const handleLogout = () => {
+          isAuthenticated.value = false;
+          loginPasscode.value = '';
+          students.value = [];
+        };
+
+        const openConfirmModal = (task) => {
+          if (!currentStudentId.value) {
+            alert('請先選擇學員！');
+            return;
+          }
+          modalTask.value = task;
+          confirmPasscode.value = '';
+          confirmError.value = '';
+        };
+
+        const closeModal = () => {
+          modalTask.value = null;
+          confirmPasscode.value = '';
+          confirmError.value = '';
+        };
+
+        // 第二關：發送簽核 POST 請求給 Apps Script
+        const submitConfirmedTask = async () => {
+          if (!confirmPasscode.value.trim()) {
+            confirmError.value = '請輸入講師通行密碼以完成簽核！';
+            return;
+          }
+
+          const task = modalTask.value;
+          const student = currentStudent.value;
+          const targetStudentId = String(currentStudentId.value);
+          const targetStudentName = student ? student.name : '';
+          const noteText = (taskNotes.value[task.id] || '').trim();
+
+          submitting.value = true;
+          confirmError.value = '';
+
+          try {
+            const res = await fetch(API_URL, {
+              method: 'POST',
+              body: JSON.stringify({
+                action: 'submit',
+                passcode: confirmPasscode.value.trim(),
+                payload: {
+                  instructor: instructor.value,
+                  studentId: targetStudentId,
+                  studentName: targetStudentName,
+                  category: task.category,
+                  taskName: task.name,
+                  note: noteText
+                }
+              })
+            });
+            const data = await res.json();
+
+            submitting.value = false;
+            if (!data.success) {
+              confirmError.value = '❌ ' + (data.message || '簽核失敗');
+              return;
+            }
+
+            completedTasks.value.push({ 
+              studentId: targetStudentId, 
+              task: task.name,
+              note: noteText
+            });
+            taskNotes.value[task.id] = '';
+            showNoteInput.value[task.id] = false;
+            closeModal();
+          } catch (err) {
+            submitting.value = false;
+            confirmError.value = '連線失敗，請檢查網路連線！';
+          }
+        };
+
+        return { 
+          loading,
+          isAuthenticated,
+          verifyingLogin,
+          loginInstructor,
+          loginPasscode,
+          loginError,
+          handleLogin,
+          handleLogout,
+          instructor, 
+          currentStudentId, 
+          currentStudent,
+          activeCat, 
+          categories, 
+          filteredTasks, 
+          isCompleted, 
+          getCompletedNote,
+          students,
+          modalTask,
+          confirmPasscode,
+          confirmError,
+          submitting,
+          openConfirmModal,
+          closeModal,
+          submitConfirmedTask,
+          taskNotes,
+          showNoteInput,
+          toggleNote
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>
