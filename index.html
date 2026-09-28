@@ -281,7 +281,19 @@
           return record ? (record.note || '') : '';
         };
 
-        // 第一關：發送 POST 請求給 Apps Script
+        // 發送 API 輔助函式（完美相容 CORS）
+        const callApi = async (bodyObj) => {
+          const response = await fetch(API_URL, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'text/plain;charset=utf-8' // 繞過 CORS preflight
+            },
+            body: JSON.stringify(bodyObj)
+          });
+          return await response.json();
+        };
+
+        // 第一關：發送登入請求
         const handleLogin = async () => {
           if (!loginInstructor.value.trim()) {
             loginError.value = '請填寫查核講師姓名！';
@@ -296,14 +308,10 @@
           verifyingLogin.value = true;
 
           try {
-            const res = await fetch(API_URL, {
-              method: 'POST',
-              body: JSON.stringify({
-                action: 'login',
-                passcode: loginPasscode.value.trim()
-              })
+            const data = await callApi({
+              action: 'login',
+              passcode: loginPasscode.value.trim()
             });
-            const data = await res.json();
 
             verifyingLogin.value = false;
             if (!data.success) {
@@ -326,7 +334,7 @@
             }
           } catch (err) {
             verifyingLogin.value = false;
-            loginError.value = '連線伺服器失敗，請確認 API 網址！';
+            loginError.value = '連線伺服器失敗，請確認 API 網址或 Apps Script 部署權限！';
           }
         };
 
@@ -352,7 +360,7 @@
           confirmError.value = '';
         };
 
-        // 第二關：發送簽核 POST 請求給 Apps Script
+        // 第二關：發送簽核請求
         const submitConfirmedTask = async () => {
           if (!confirmPasscode.value.trim()) {
             confirmError.value = '請輸入講師通行密碼以完成簽核！';
@@ -369,22 +377,18 @@
           confirmError.value = '';
 
           try {
-            const res = await fetch(API_URL, {
-              method: 'POST',
-              body: JSON.stringify({
-                action: 'submit',
-                passcode: confirmPasscode.value.trim(),
-                payload: {
-                  instructor: instructor.value,
-                  studentId: targetStudentId,
-                  studentName: targetStudentName,
-                  category: task.category,
-                  taskName: task.name,
-                  note: noteText
-                }
-              })
+            const data = await callApi({
+              action: 'submit',
+              passcode: confirmPasscode.value.trim(),
+              payload: {
+                instructor: instructor.value,
+                studentId: targetStudentId,
+                studentName: targetStudentName,
+                category: task.category,
+                taskName: task.name,
+                note: noteText
+              }
             });
-            const data = await res.json();
 
             submitting.value = false;
             if (!data.success) {
